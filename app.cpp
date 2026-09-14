@@ -1,399 +1,1154 @@
-#include <iostream>
-#include <vector>
-#include <string>
-#include <set>
-#include <thread>
-#include <chrono>
-#include <filesystem>
-#include <unordered_map>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <mutex>
 #include <algorithm>
+#include <arpa/inet.h>
+#include <chrono>
+#include <cctype>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits.h>
+#include <mutex>
+#include <netdb.h>
+#include <set>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 #include <csignal>
 
-// YARA Library
-#include <yara.h>
+#include <sys/inotify.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#ifdef _WIN32
-    #include <windows.h>
-    #include <tlhelp32.h>
-    #include <iphlpapi.h>
-    #include <ws2tcpip.h>
-    #pragma comment(lib, "iphlpapi.lib")
-    #pragma comment(lib, "ws2_32.lib")
-#else
-    #include <sys/types.h>
-    #include <sys/inotify.h>
-    #include <sys/socket.h>
-    #include <netdb.h>
-    #include <unistd.h>
-    #include <dirent.h>
-    #include <arpa/inet.h>
-    #include <cstring>
-#endif
+#include <yara.h>
 
 namespace fs = std::filesystem;
 
+// ============================================================================
+// LOGGER
+// ============================================================================
 
 class Logger {
 private:
     static inline std::mutex logMutex;
     static inline std::ofstream logFile;
+
 public:
     static void init(const std::string& filename = "activity_log.txt") {
-        logFile.open(filename, std::ios::app);
+        logFile.open(filename, std::ios::out | std::ios::app);
+
+        if (!logFile.is_open()) {
+            std::cerr << "[-] Cannot open log file: " << filename << '\n';
+        } else {
+            std::cout << "[+] Logging to: "
+                      << fs::absolute(filename).string()
+                      << '\n';
+        }
     }
-    static void log(const std::string& msg, bool critical = false) {
+
+    static void log(const std::string& message, bool critical = false) {
         std::lock_guard<std::mutex> lock(logMutex);
-        std::string prefix = critical ? "🚨 !!! " : "";
-        std::cout << prefix << msg << std::endl;
-        if (logFile.is_open()) logFile << prefix << msg << std::endl;
+
+        const std::string prefix = critical ? "[!] " : "";
+        const std::string line = prefix + message;
+
+        std::cout << line << std::endl;
+
+        if (logFile.is_open()) {
+            logFile << line << '\n';
+            logFile.flush();
+        }
     }
 };
 
+// ============================================================================
+// DNS RESOLVER
+// ============================================================================
 
-std::string resolveDomain(const std::string& ipStr) {
-    static std::unordered_map<std::string, std::string> dnsCache;
+std::string resolveDomain(const std::string& ip) {
+    static std::unordered_map<std::string, std::string> cache;
     static std::mutex cacheMutex;
 
     {
         std::lock_guard<std::mutex> lock(cacheMutex);
-        if (dnsCache.find(ipStr) != dnsCache.end()) return dnsCache[ipStr];
+        const auto it = cache.find(ip);
+        if (it != cache.end()) {
+            return it->second;
+        }
     }
 
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    if (inet_pton(AF_INET, ipStr.c_str(), &sa.sin_addr) <= 0) return ipStr;
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
 
-    char host[NI_MAXHOST];
-    if (getnameinfo((struct sockaddr*)&sa, sizeof(sa), host, sizeof(host), NULL, 0, NI_NAMEREQD) == 0) {
-        std::string domainName(host);
+    if (inet_pton(AF_INET, ip.c_str(), &address.sin_addr) != 1) {
+        return ip;
+    }
+
+    char host[NI_MAXHOST]{};
+
+    const int result = getnameinfo(
+        reinterpret_cast<sockaddr*>(&address),
+        sizeof(address),
+        host,
+        sizeof(host),
+        nullptr,
+        0,
+        NI_NAMEREQD
+    );
+
+    const std::string domain =
+        result == 0 ? std::string(host) : "direct-ip";
+
+    {
         std::lock_guard<std::mutex> lock(cacheMutex);
-        dnsCache[ipStr] = domainName;
-        return domainName;
+        cache[ip] = domain;
     }
 
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    dnsCache[ipStr] = "direct-ip";
-    return "direct-ip";
+    return domain;
 }
 
+// ============================================================================
+// PROCESS METADATA
+// ============================================================================
 
 struct ProcessMeta {
-    unsigned long pid;
-    unsigned long ppid;
-    std::string name;
+    unsigned long pid = 0;
+    unsigned long ppid = 0;
+    std::string name = "<unknown>";
     std::string exePath;
 };
 
-ProcessMeta getProcessMeta(unsigned long pid) {
-    if (pid == 0) return {0, 0, "<unknown>", ""};
-    ProcessMeta meta = {pid, 0, "<unknown>", ""};
-
-#ifndef _WIN32
-    std::ifstream statFile("/proc/" + std::to_string(pid) + "/stat");
-    if (statFile.is_open()) {
-        std::string comm; char state;
-        statFile >> meta.pid >> comm >> state >> meta.ppid;
-        if (comm.size() >= 2) meta.name = comm.substr(1, comm.size() - 2);
-    }
-    char linkPath[PATH_MAX];
-    ssize_t len = readlink(("/proc/" + std::to_string(pid) + "/exe").c_str(), linkPath, sizeof(linkPath)-1);
-    if (len != -1) { linkPath[len] = '\0'; meta.exePath = std::string(linkPath); }
-#endif
-    return meta;
-}
-
-class ActiveResponder {
-public:
-    static bool isProtectedProcess(unsigned long pid, const std::string& name) {
-        if (pid <= 1000 || pid == getpid()) return true;
-        std::vector<std::string> protectedApps = {
-            "systemd", "gdm3", "gnome-shell", "Xorg", "wayland", 
-            "code", "node", "dbus-daemon", "pipewire", "pulseaudio", "bash"
-        };
-        std::string lowerName = name;
-        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
-        for (const auto& app : protectedApps) {
-            if (lowerName.find(app) != std::string::npos) return true;
-        }
+bool isNumeric(const std::string& value) {
+    if (value.empty()) {
         return false;
     }
 
-    static void killProcess(unsigned long pid, const std::string& name, const std::string& reason) {
+    return std::all_of(
+        value.begin(),
+        value.end(),
+        [](unsigned char c) {
+            return std::isdigit(c);
+        }
+    );
+}
+
+ProcessMeta getProcessMeta(unsigned long pid) {
+    ProcessMeta result;
+    result.pid = pid;
+
+    if (pid == 0) {
+        return result;
+    }
+
+    const std::string pidText = std::to_string(pid);
+
+    // Надежный разбор /proc/PID/stat.
+    std::ifstream statFile(
+        "/proc/" + pidText + "/stat"
+    );
+
+    if (statFile.is_open()) {
+        std::string line;
+        std::getline(statFile, line);
+
+        const std::size_t openBracket = line.find('(');
+        const std::size_t closeBracket = line.rfind(')');
+
+        if (openBracket != std::string::npos &&
+            closeBracket != std::string::npos &&
+            closeBracket > openBracket) {
+
+            result.name = line.substr(
+                openBracket + 1,
+                closeBracket - openBracket - 1
+            );
+
+            std::istringstream rest(
+                line.substr(closeBracket + 2)
+            );
+
+            char state = 0;
+            rest >> state >> result.ppid;
+        }
+    }
+
+    char exeBuffer[PATH_MAX]{};
+
+    const std::string exeLink =
+        "/proc/" + pidText + "/exe";
+
+    const ssize_t length = readlink(
+        exeLink.c_str(),
+        exeBuffer,
+        sizeof(exeBuffer) - 1
+    );
+
+    if (length > 0) {
+        exeBuffer[length] = '\0';
+        result.exePath = exeBuffer;
+    }
+
+    return result;
+}
+
+// ============================================================================
+// NOISE FILTER
+// ============================================================================
+
+bool isProcessNoise(const ProcessMeta& process) {
+    if (process.ppid == 2) {
+        return true;
+    }
+
+    const std::string& name = process.name;
+
+    if (name.rfind("kworker", 0) == 0 ||
+        name.rfind("ksoftirqd", 0) == 0 ||
+        name.rfind("migration", 0) == 0 ||
+        name.rfind("cpuhp", 0) == 0) {
+        return true;
+    }
+
+    if (name == "cpuUsage.sh" ||
+        name == "bwrap" ||
+        name == "glycin-image-rs" ||
+        name == "glycin-svg") {
+        return true;
+    }
+
+    return false;
+}
+
+bool isNetworkNoise(const std::string& name) {
+    return name == "systemd-resolved" ||
+           name == "avahi-daemon" ||
+           name == "kworker" ||
+           name.rfind("kworker/", 0) == 0;
+}
+
+// ============================================================================
+// ACTIVE RESPONDER
+// ============================================================================
+
+class ActiveResponder {
+public:
+    static bool isProtectedProcess(
+        unsigned long pid,
+        const std::string& name
+    ) {
+        if (pid <= 1000 || pid == static_cast<unsigned long>(getpid())) {
+            return true;
+        }
+
+        const std::vector<std::string> protectedNames = {
+            "systemd",
+            "gdm3",
+            "gnome-shell",
+            "Xorg",
+            "wayland",
+            "dbus-daemon",
+            "pipewire",
+            "pulseaudio",
+            "NetworkManager"
+        };
+
+        std::string lowerName = name;
+        std::transform(
+            lowerName.begin(),
+            lowerName.end(),
+            lowerName.begin(),
+            [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            }
+        );
+
+        for (const auto& protectedName : protectedNames) {
+            std::string lowerProtected = protectedName;
+            std::transform(
+                lowerProtected.begin(),
+                lowerProtected.end(),
+                lowerProtected.begin(),
+                [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                }
+            );
+
+            if (lowerName == lowerProtected) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static void terminateProcess(
+        unsigned long pid,
+        const std::string& name,
+        const std::string& reason
+    ) {
         if (isProtectedProcess(pid, name)) {
-            Logger::log("[⚠️ WHITELIST] Skipped kill for system process: " + name + " (PID: " + std::to_string(pid) + ")", true);
+            Logger::log(
+                "[WHITELIST] Kill skipped for protected process " +
+                name + " (PID: " + std::to_string(pid) + ")"
+            );
             return;
         }
-        Logger::log("[⚡ RESPONSE] KILLING PID: " + std::to_string(pid) + " (" + name + ") | Reason: " + reason, true);
-#ifndef _WIN32
-        kill(pid, SIGKILL);
-#endif
+
+        Logger::log(
+            "[RESPONSE] Terminating PID: " +
+            std::to_string(pid) +
+            " (" + name + ") | Reason: " + reason,
+            true
+        );
+
+        if (kill(static_cast<pid_t>(pid), SIGKILL) == 0) {
+            Logger::log(
+                "[RESPONSE] Process PID " +
+                std::to_string(pid) +
+                " terminated"
+            );
+        } else {
+            Logger::log(
+                "[ERROR] Cannot terminate PID " +
+                std::to_string(pid) + ": " +
+                std::strerror(errno),
+                true
+            );
+        }
     }
 };
 
+// ============================================================================
+// YARA SCANNER
+// ============================================================================
 
 class YaraScanner {
 private:
-    YR_COMPILER* compiler = nullptr;
-    YR_RULES* rules = nullptr;
+    YR_COMPILER* compiler_ = nullptr;
+    YR_RULES* rules_ = nullptr;
+    bool initialized_ = false;
 
-    static int callback(YR_SCAN_CONTEXT* context, int message, void* message_data, void* user_data) {
-        if (message == CALLBACK_MSG_RULE_MATCHING) {
-            YR_RULE* rule = (YR_RULE*)message_data;
-            std::string* matchName = (std::string*)user_data;
-            *matchName = rule->identifier;
+    static int callback(
+        YR_SCAN_CONTEXT*,
+        int message,
+        void* messageData,
+        void* userData
+    ) {
+        if (message == CALLBACK_MSG_RULE_MATCHING &&
+            messageData != nullptr &&
+            userData != nullptr) {
+
+            auto* rule = static_cast<YR_RULE*>(messageData);
+            auto* ruleName = static_cast<std::string*>(userData);
+            *ruleName = rule->identifier;
         }
+
         return CALLBACK_CONTINUE;
     }
 
 public:
     YaraScanner() {
-        yr_initialize();
-        yr_compiler_create(&compiler);
-        const char* ruleString = 
-            "rule Detect_Test_Malware { \
-                strings: \
-                    $s1 = \"EICAR-STANDARD-ANTIVIRUS-TEST-FILE\" \
-                    $s2 = \"CUSTOM_MALWARE_SIGNATURE_TEST\" \
-                condition: any of them }";
+        if (yr_initialize() != ERROR_SUCCESS) {
+            Logger::log("[YARA] Initialization failed", true);
+            return;
+        }
 
-        yr_compiler_add_string(compiler, ruleString, NULL);
-        yr_compiler_get_rules(compiler, &rules);
+        if (yr_compiler_create(&compiler_) != ERROR_SUCCESS ||
+            compiler_ == nullptr) {
+            Logger::log("[YARA] Compiler creation failed", true);
+            yr_finalize();
+            return;
+        }
+
+        const char* ruleText = R"(
+rule Detect_Test_Malware {
+    strings:
+        $eicar = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
+        $custom = "CUSTOM_MALWARE_SIGNATURE_TEST"
+    condition:
+        any of them
+}
+)";
+
+        if (yr_compiler_add_string(
+                compiler_,
+                ruleText,
+                nullptr
+            ) != ERROR_SUCCESS) {
+
+            Logger::log("[YARA] Rule compilation failed", true);
+            yr_compiler_destroy(compiler_);
+            compiler_ = nullptr;
+            yr_finalize();
+            return;
+        }
+
+        if (yr_compiler_get_rules(
+                compiler_,
+                &rules_
+            ) != ERROR_SUCCESS ||
+            rules_ == nullptr) {
+
+            Logger::log(
+                "[YARA] Cannot obtain compiled rules",
+                true
+            );
+            yr_compiler_destroy(compiler_);
+            compiler_ = nullptr;
+            yr_finalize();
+            return;
+        }
+
+        initialized_ = true;
+        Logger::log("[YARA] Scanner initialized");
     }
 
     ~YaraScanner() {
-        if (rules) yr_rules_destroy(rules);
-        if (compiler) yr_compiler_destroy(compiler);
+        if (rules_ != nullptr) {
+            yr_rules_destroy(rules_);
+        }
+
+        if (compiler_ != nullptr) {
+            yr_compiler_destroy(compiler_);
+        }
+
         yr_finalize();
     }
 
-    bool scanFile(const std::string& path, std::string& foundRule) {
-        if (!fs::exists(path) || fs::is_directory(path)) return false;
-        yr_rules_scan_file(rules, path.c_str(), 0, callback, &foundRule, 0);
-        return !foundRule.empty();
+    bool scanFile(
+        const std::string& path,
+        std::string& matchedRule
+    ) const {
+        matchedRule.clear();
+
+        if (!initialized_ || rules_ == nullptr || path.empty()) {
+            return false;
+        }
+
+        std::error_code error;
+
+        if (!fs::exists(path, error) ||
+            !fs::is_regular_file(path, error)) {
+            return false;
+        }
+
+        const int result = yr_rules_scan_file(
+            rules_,
+            path.c_str(),
+            0,
+            callback,
+            &matchedRule,
+            0
+        );
+
+        if (result != ERROR_SUCCESS) {
+            Logger::log(
+                "[YARA] Scan failed for: " + path,
+                true
+            );
+            return false;
+        }
+
+        return !matchedRule.empty();
     }
 };
 
+// ============================================================================
+// PROCESS WATCHER
+// ============================================================================
 
 class ProcessWatcher {
 private:
-    std::unordered_map<unsigned long, std::string> knownPids;
-    YaraScanner yara;
-    bool isFirstRun = true;
+    std::unordered_map<
+        unsigned long,
+        std::string
+    > knownProcesses_;
+
+    YaraScanner yara_;
+    bool firstScan_ = true;
 
 public:
     void scan() {
-        std::unordered_map<unsigned long, std::string> currentPids;
+        std::unordered_map<
+            unsigned long,
+            std::string
+        > currentProcesses;
 
-#ifndef _WIN32
-        for (const auto& entry : fs::directory_iterator("/proc")) {
-            std::string pidStr = entry.path().filename().string();
-            if (!std::all_of(pidStr.begin(), pidStr.end(), ::isdigit)) continue;
+        try {
+            for (const auto& entry :
+                 fs::directory_iterator("/proc")) {
 
-            unsigned long pid = std::stoul(pidStr);
-            ProcessMeta child = getProcessMeta(pid);
-            currentPids[pid] = child.name;
+                const std::string pidText =
+                    entry.path().filename().string();
 
-            if (knownPids.find(pid) == knownPids.end()) {
-                if (!isFirstRun) {
-                    ProcessMeta parent = getProcessMeta(child.ppid);
-                    Logger::log("[⚙️ PROC_LAUNCH] PID: " + std::to_string(pid) + " | Parent PID: " + std::to_string(child.ppid) + " | App: [" + child.name + "]");
+                if (!isNumeric(pidText)) {
+                    continue;
+                }
 
-                    // Проверка запуск из /tmp/
-                    if (!child.exePath.empty() && (child.exePath.rfind("/tmp/", 0) == 0 || child.exePath.rfind("/dev/shm/", 0) == 0)) {
-                        ActiveResponder::killProcess(pid, child.name, "Execution from /tmp/ directory");
+                unsigned long pid = 0;
+
+                try {
+                    pid = std::stoul(pidText);
+                } catch (...) {
+                    continue;
+                }
+
+                const ProcessMeta process =
+                    getProcessMeta(pid);
+
+                if (process.name == "<unknown>") {
+                    continue;
+                }
+
+                currentProcesses[pid] = process.name;
+
+                if (firstScan_) {
+                    continue;
+                }
+
+                if (knownProcesses_.find(pid) !=
+                    knownProcesses_.end()) {
+                    continue;
+                }
+
+                if (isProcessNoise(process)) {
+                    continue;
+                }
+
+                const ProcessMeta parent =
+                    getProcessMeta(process.ppid);
+
+                std::stringstream message;
+                message << "[PROC_LAUNCH] PID: "
+                        << process.pid
+                        << " | PPID: "
+                        << process.ppid
+                        << " | Parent: ["
+                        << parent.name
+                        << "] | App: ["
+                        << process.name
+                        << "]";
+
+                Logger::log(message.str());
+
+                // YARA-проверка нового исполняемого файла.
+                std::string matchedRule;
+
+                if (yara_.scanFile(
+                        process.exePath,
+                        matchedRule
+                    )) {
+
+                    ActiveResponder::terminateProcess(
+                        process.pid,
+                        process.name,
+                        "YARA rule matched: " + matchedRule
+                    );
+
+                    continue;
+                }
+
+                // Проверка запуска из временных директорий.
+                if (!process.exePath.empty() &&
+                    (process.exePath.rfind("/tmp/", 0) == 0 ||
+                     process.exePath.rfind("/dev/shm/", 0) == 0)) {
+
+                    ActiveResponder::terminateProcess(
+                        process.pid,
+                        process.name,
+                        "Executable started from temporary directory: " +
+                        process.exePath
+                    );
+                }
+            }
+        } catch (const std::exception& error) {
+            Logger::log(
+                std::string("[PROCESS] Scan error: ") +
+                error.what(),
+                true
+            );
+        }
+
+        if (!firstScan_) {
+            for (const auto& [pid, name] :
+                 knownProcesses_) {
+
+                if (currentProcesses.find(pid) ==
+                    currentProcesses.end()) {
+
+                    if (name.rfind("kworker", 0) == 0 ||
+                        name.rfind("ksoftirqd", 0) == 0 ||
+                        name == "cpuUsage.sh" ||
+                        name == "bwrap" ||
+                        name == "glycin-image-rs" ||
+                        name == "glycin-svg") {
                         continue;
                     }
 
-                    // YARA Сканирование
-                    std::string match;
-                    if (!child.exePath.empty() && yara.scanFile(child.exePath, match)) {
-                        ActiveResponder::killProcess(pid, child.name, "YARA Signature Match: " + match);
-                    }
+                    Logger::log(
+                        "[PROC_EXIT] PID: " +
+                        std::to_string(pid) +
+                        " | App: [" +
+                        name +
+                        "]"
+                    );
                 }
             }
         }
-#endif
-        for (const auto& [pid, name] : knownPids) {
-            if (currentPids.find(pid) == currentPids.end() && !isFirstRun) {
-                Logger::log("[⚙️ PROC_EXIT]   PID: " + std::to_string(pid) + " | App: [" + name + "]");
-            }
-        }
 
-        knownPids = std::move(currentPids);
-        if (isFirstRun) isFirstRun = false;
+        knownProcesses_ =
+            std::move(currentProcesses);
+
+        firstScan_ = false;
     }
 };
 
+// ============================================================================
+// NETWORK WATCHER
+// ============================================================================
 
 struct SocketConnection {
-    unsigned long pid;
-    unsigned long ppid;
-    std::string procName;
-    std::string remoteAddr;
-    int remotePort;
+    unsigned long pid = 0;
+    unsigned long ppid = 0;
+    std::string processName;
+    std::string remoteIp;
+    int remotePort = 0;
     std::string domain;
-    std::string getKey() const { return std::to_string(pid) + "|" + remoteAddr + ":" + std::to_string(remotePort); }
+
+    std::string key() const {
+        return std::to_string(pid) + "|" +
+               remoteIp + ":" +
+               std::to_string(remotePort);
+    }
 };
 
 class NetworkWatcher {
 private:
-    std::unordered_map<std::string, SocketConnection> knownConnections;
+    std::unordered_map<
+        std::string,
+        SocketConnection
+    > knownConnections_;
 
-#ifndef _WIN32
-    std::unordered_map<unsigned long, unsigned long> resolveInodesToPid(const std::set<unsigned long>& targetInodes) {
-        std::unordered_map<unsigned long, unsigned long> inodeToPidMap;
-        if (targetInodes.empty()) return inodeToPidMap;
+    struct RawSocket {
+        unsigned long inode = 0;
+        std::string remoteIp;
+        int remotePort = 0;
+    };
 
-        for (const auto& entry : fs::directory_iterator("/proc")) {
-            std::string name = entry.path().filename().string();
-            if (!std::all_of(name.begin(), name.end(), ::isdigit)) continue;
+    static bool parseEndpoint(
+        const std::string& endpoint,
+        unsigned int& ip,
+        unsigned int& port
+    ) {
+        const std::size_t separator =
+            endpoint.find(':');
 
-            unsigned long pid = std::stoul(name);
-            std::string fdPath = "/proc/" + name + "/fd";
-            try {
-                for (const auto& fdEntry : fs::directory_iterator(fdPath)) {
-                    char linkPath[PATH_MAX];
-                    ssize_t len = readlink(fdEntry.path().c_str(), linkPath, sizeof(linkPath) - 1);
-                    if (len != -1) {
-                        linkPath[len] = '\0';
-                        std::string sLink(linkPath);
-                        if (sLink.rfind("socket:[", 0) == 0) {
-                            unsigned long inode = std::stoul(sLink.substr(8, sLink.size() - 9));
-                            if (targetInodes.count(inode)) inodeToPidMap[inode] = pid;
-                        }
+        if (separator == std::string::npos) {
+            return false;
+        }
+
+        try {
+            ip = std::stoul(
+                endpoint.substr(0, separator),
+                nullptr,
+                16
+            );
+
+            port = std::stoul(
+                endpoint.substr(separator + 1),
+                nullptr,
+                16
+            );
+        } catch (...) {
+            return false;
+        }
+
+        return true;
+    }
+
+    static std::string procHexToIpv4(
+        unsigned int value
+    ) {
+        in_addr address{};
+        address.s_addr = htonl(value);
+
+        char buffer[INET_ADDRSTRLEN]{};
+
+        if (inet_ntop(
+                AF_INET,
+                &address,
+                buffer,
+                sizeof(buffer)
+            ) == nullptr) {
+
+            return "unknown";
+        }
+
+        return buffer;
+    }
+
+    static std::unordered_map<
+        unsigned long,
+        unsigned long
+    > buildInodePidMap(
+        const std::set<unsigned long>& wantedInodes
+    ) {
+        std::unordered_map<
+            unsigned long,
+            unsigned long
+        > result;
+
+        if (wantedInodes.empty()) {
+            return result;
+        }
+
+        try {
+            for (const auto& processEntry :
+                 fs::directory_iterator("/proc")) {
+
+                const std::string pidText =
+                    processEntry.path().filename().string();
+
+                if (!isNumeric(pidText)) {
+                    continue;
+                }
+
+                unsigned long pid = 0;
+
+                try {
+                    pid = std::stoul(pidText);
+                } catch (...) {
+                    continue;
+                }
+
+                const fs::path fdDirectory =
+                    processEntry.path() / "fd";
+
+                for (const auto& fdEntry :
+                     fs::directory_iterator(
+                         fdDirectory,
+                         fs::directory_options::skip_permission_denied
+                     )) {
+
+                    char socketBuffer[PATH_MAX]{};
+
+                    const ssize_t length = readlink(
+                        fdEntry.path().c_str(),
+                        socketBuffer,
+                        sizeof(socketBuffer) - 1
+                    );
+
+                    if (length <= 0) {
+                        continue;
+                    }
+
+                    socketBuffer[length] = '\0';
+
+                    const std::string target =
+                        socketBuffer;
+
+                    if (target.rfind(
+                            "socket:[",
+                            0
+                        ) != 0) {
+                        continue;
+                    }
+
+                    const std::size_t end =
+                        target.find(']');
+
+                    if (end == std::string::npos) {
+                        continue;
+                    }
+
+                    unsigned long inode = 0;
+
+                    try {
+                        inode = std::stoul(
+                            target.substr(8, end - 8)
+                        );
+                    } catch (...) {
+                        continue;
+                    }
+
+                    if (wantedInodes.find(inode) !=
+                        wantedInodes.end()) {
+
+                        result[inode] = pid;
                     }
                 }
-            } catch (...) {}
+            }
+        } catch (...) {
         }
-        return inodeToPidMap;
+
+        return result;
     }
-#endif
 
 public:
     void scan() {
-        std::vector<SocketConnection> current;
-#ifndef _WIN32
-        struct RawSocket { unsigned long inode; std::string ip; int port; };
         std::vector<RawSocket> rawSockets;
-        std::set<unsigned long> requiredInodes;
+        std::set<unsigned long> wantedInodes;
 
         std::ifstream tcpFile("/proc/net/tcp");
-        std::string line; std::getline(tcpFile, line);
+
+        if (!tcpFile.is_open()) {
+            Logger::log(
+                "[NETWORK] Cannot read /proc/net/tcp",
+                true
+            );
+            return;
+        }
+
+        std::string line;
+        std::getline(tcpFile, line);
 
         while (std::getline(tcpFile, line)) {
-            std::stringstream ss(line);
-            std::string sl, local, remote, st; unsigned long inode;
-            ss >> sl >> local >> remote >> st >> sl >> sl >> sl >> sl >> sl >> inode;
+            std::istringstream input(line);
 
-            unsigned int rIp, rPort;
-            sscanf(remote.c_str(), "%X:%X", &rIp, &rPort);
-            if (rIp == 0 || st != "01") continue;
+            std::string slot;
+            std::string localEndpoint;
+            std::string remoteEndpoint;
+            std::string state;
 
-            struct in_addr rAddrStruct{rIp};
-            rawSockets.push_back({inode, inet_ntoa(rAddrStruct), (int)rPort});
-            requiredInodes.insert(inode);
+            input >> slot
+                  >> localEndpoint
+                  >> remoteEndpoint
+                  >> state;
+
+            // Только ESTABLISHED.
+            if (state != "01") {
+                continue;
+            }
+
+            // Структура /proc/net/tcp после первых четырех колонок:
+            // tx_queue:rx_queue, tr, tm->when, retrnsmt,
+            // uid, timeout, inode.
+            std::vector<std::string> columns;
+            std::string column;
+
+            while (input >> column) {
+                columns.push_back(column);
+            }
+
+            if (columns.size() < 7) {
+                continue;
+            }
+
+            unsigned int remoteIpHex = 0;
+            unsigned int remotePortHex = 0;
+
+            if (!parseEndpoint(
+                    remoteEndpoint,
+                    remoteIpHex,
+                    remotePortHex
+                )) {
+                continue;
+            }
+
+            unsigned long inode = 0;
+
+            try {
+                inode = std::stoul(columns[6]);
+            } catch (...) {
+                continue;
+            }
+
+            if (remoteIpHex == 0 ||
+                remotePortHex == 0 ||
+                inode == 0) {
+                continue;
+            }
+
+            rawSockets.push_back({
+                inode,
+                procHexToIpv4(remoteIpHex),
+                static_cast<int>(remotePortHex)
+            });
+
+            wantedInodes.insert(inode);
         }
 
-        auto inodeMap = resolveInodesToPid(requiredInodes);
+        const auto inodeToPid =
+            buildInodePidMap(wantedInodes);
+
+        std::unordered_map<
+            std::string,
+            SocketConnection
+        > currentConnections;
 
         for (const auto& raw : rawSockets) {
-            unsigned long pid = inodeMap.count(raw.inode) ? inodeMap[raw.inode] : 0;
-            ProcessMeta meta = getProcessMeta(pid);
-            std::string domainName = resolveDomain(raw.ip);
-            current.push_back({pid, meta.ppid, meta.name, raw.ip, raw.port, domainName});
+            const auto owner =
+                inodeToPid.find(raw.inode);
+
+            if (owner == inodeToPid.end()) {
+                continue;
+            }
+
+            const unsigned long pid =
+                owner->second;
+
+            const ProcessMeta process =
+                getProcessMeta(pid);
+
+            if (process.name == "<unknown>" ||
+                isNetworkNoise(process.name)) {
+                continue;
+            }
+
+            SocketConnection connection;
+            connection.pid = pid;
+            connection.ppid = process.ppid;
+            connection.processName = process.name;
+            connection.remoteIp = raw.remoteIp;
+            connection.remotePort = raw.remotePort;
+            connection.domain =
+                resolveDomain(raw.remoteIp);
+
+            currentConnections[
+                connection.key()
+            ] = connection;
         }
-#endif
 
-        std::unordered_map<std::string, SocketConnection> currentMap;
-        for (auto& conn : current) {
-            std::string key = conn.getKey();
-            currentMap[key] = conn;
+        for (const auto& [key, connection] :
+             currentConnections) {
 
-            if (knownConnections.find(key) == knownConnections.end()) {
-                std::stringstream msg;
-                msg << "[🌐 WEB_CONNECT] PID: " << conn.pid << " [" << conn.procName << "] -> "
-                    << conn.remoteAddr << ":" << conn.remotePort << " (Domain: " << conn.domain << ")";
-                Logger::log(msg.str());
+            if (knownConnections_.find(key) ==
+                knownConnections_.end()) {
+
+                std::stringstream message;
+                message << "[WEB_CONNECT] PID: "
+                        << connection.pid
+                        << " | PPID: "
+                        << connection.ppid
+                        << " | App: ["
+                        << connection.processName
+                        << "] -> "
+                        << connection.remoteIp
+                        << ":"
+                        << connection.remotePort
+                        << " (Domain: "
+                        << connection.domain
+                        << ")";
+
+                Logger::log(message.str());
             }
         }
 
-        for (const auto& [key, conn] : knownConnections) {
-            if (currentMap.find(key) == currentMap.end()) {
-                std::stringstream msg;
-                msg << "[🌐 WEB_DISCONN] PID: " << conn.pid << " [" << conn.procName << "] closed connection to "
-                    << conn.remoteAddr << ":" << conn.remotePort << " (" << conn.domain << ")";
-                Logger::log(msg.str());
+        for (const auto& [key, connection] :
+             knownConnections_) {
+
+            if (currentConnections.find(key) ==
+                currentConnections.end()) {
+
+                std::stringstream message;
+                message << "[WEB_DISCONN] PID: "
+                        << connection.pid
+                        << " | PPID: "
+                        << connection.ppid
+                        << " | App: ["
+                        << connection.processName
+                        << "] <- "
+                        << connection.remoteIp
+                        << ":"
+                        << connection.remotePort
+                        << " (Domain: "
+                        << connection.domain
+                        << ")";
+
+                Logger::log(message.str());
             }
         }
 
-        knownConnections = std::move(currentMap);
+        knownConnections_ =
+            std::move(currentConnections);
     }
 };
 
+// ============================================================================
+// EVENT FILE SYSTEM WATCHER
+// ============================================================================
 
 class EventFileSystemWatcher {
 private:
-    std::string watchDir;
+    std::string watchDirectory_;
+
     void linuxWatchLoop() {
-#ifndef _WIN32
-        int fd = inotify_init();
-        if (fd < 0) return;
-        int wd = inotify_add_watch(fd, watchDir.c_str(), IN_CREATE | IN_MODIFY | IN_DELETE);
-        char buffer[4096];
+        const int fd = inotify_init1(0);
+
+        if (fd < 0) {
+            Logger::log(
+                "[FILE] inotify initialization failed: " +
+                std::string(std::strerror(errno)),
+                true
+            );
+            return;
+        }
+
+        const int watchDescriptor = inotify_add_watch(
+            fd,
+            watchDirectory_.c_str(),
+            IN_CREATE |
+            IN_MODIFY |
+            IN_DELETE |
+            IN_MOVED_FROM |
+            IN_MOVED_TO |
+            IN_CLOSE_WRITE
+        );
+
+        if (watchDescriptor < 0) {
+            Logger::log(
+                "[FILE] Cannot watch directory " +
+                watchDirectory_ + ": " +
+                std::strerror(errno),
+                true
+            );
+            close(fd);
+            return;
+        }
+
+        Logger::log(
+            "[FILE] Monitoring directory: " +
+            watchDirectory_
+        );
+
+        std::vector<char> buffer(64 * 1024);
+
         while (true) {
-            ssize_t len = read(fd, buffer, sizeof(buffer));
-            if (len <= 0) continue;
-            char* ptr = buffer;
-            while (ptr < buffer + len) {
-                struct inotify_event* event = (struct inotify_event*)ptr;
-                if (event->len > 0 && std::string(event->name).find("activity_log.txt") == std::string::npos) {
-                    if (event->mask & IN_CREATE) Logger::log("[📁 FILE_CREATED]  " + watchDir + "/" + event->name);
-                    else if (event->mask & IN_MODIFY) Logger::log("[📁 FILE_MODIFIED] " + watchDir + "/" + event->name);
-                    else if (event->mask & IN_DELETE) Logger::log("[📁 FILE_DELETED]  " + watchDir + "/" + event->name);
+            const ssize_t length = read(
+                fd,
+                buffer.data(),
+                buffer.size()
+            );
+
+            if (length < 0) {
+                if (errno == EINTR) {
+                    continue;
                 }
-                ptr += sizeof(struct inotify_event) + event->len;
+
+                Logger::log(
+                    "[FILE] Read error: " +
+                    std::string(std::strerror(errno)),
+                    true
+                );
+                break;
+            }
+
+            ssize_t offset = 0;
+
+            while (offset < length) {
+                const auto* event =
+                    reinterpret_cast<
+                        const struct inotify_event*
+                    >(buffer.data() + offset);
+
+                if (event->len > 0) {
+                    const fs::path path =
+                        fs::path(watchDirectory_) /
+                        event->name;
+
+                    std::string eventType;
+
+                    if (event->mask & IN_CREATE) {
+                        eventType = "FILE_CREATED";
+                    } else if (event->mask & IN_MODIFY) {
+                        eventType = "FILE_MODIFIED";
+                    } else if (event->mask & IN_CLOSE_WRITE) {
+                        eventType = "FILE_CLOSED_AFTER_WRITE";
+                    } else if (event->mask & IN_DELETE) {
+                        eventType = "FILE_DELETED";
+                    } else if (event->mask & IN_MOVED_FROM) {
+                        eventType = "FILE_MOVED_FROM";
+                    } else if (event->mask & IN_MOVED_TO) {
+                        eventType = "FILE_MOVED_TO";
+                    }
+
+                    if (!eventType.empty() &&
+                        path.filename() !=
+                            "activity_log.txt") {
+
+                        Logger::log(
+                            "[" + eventType + "] " +
+                            path.string()
+                        );
+                    }
+                }
+
+                offset +=
+                    sizeof(struct inotify_event) +
+                    event->len;
             }
         }
+
+        inotify_rm_watch(fd, watchDescriptor);
         close(fd);
-#endif
     }
 
 public:
-    explicit EventFileSystemWatcher(std::string path) : watchDir(std::move(path)) {}
-    void startAsync() { std::thread(&EventFileSystemWatcher::linuxWatchLoop, this).detach(); }
+    explicit EventFileSystemWatcher(
+        std::string directory
+    ) : watchDirectory_(std::move(directory)) {}
+
+    void startAsync() {
+        std::thread(
+            &EventFileSystemWatcher::linuxWatchLoop,
+            this
+        ).detach();
+    }
 };
 
-
+// ============================================================================
+// MAIN
+// ============================================================================
 
 int main() {
-    Logger::init();
+    Logger::init("activity_log.txt");
 
-    Logger::log("=================================================================");
-    Logger::log("  FULL EDR AGENT ACTIVE (Files + Web + Processes + YARA + Protect)");
-    Logger::log("=================================================================\n");
+    Logger::log(
+        "=========================================================="
+    );
+    Logger::log(
+        " FULL EDR AGENT ACTIVE"
+    );
+    Logger::log(
+        " Processes + Network + Files + YARA"
+    );
+    Logger::log(
+        "=========================================================="
+    );
 
-    std::string currentPath = fs::current_path().string();
+    // Файловый мониторинг текущей папки проекта.
+    // Для мониторинга /home замените аргумент на "/home".
+    EventFileSystemWatcher fileWatcher(
+        fs::current_path().string()
+    );
 
-    // 1. Асинхронный запуск отслеживания файлов
-    EventFileSystemWatcher fileWatcher(currentPath);
     fileWatcher.startAsync();
 
-    ProcessWatcher procWatcher;
-    NetworkWatcher netWatcher;
+    ProcessWatcher processWatcher;
+    NetworkWatcher networkWatcher;
 
-    Logger::log("[i] Monitoring directory: " + currentPath);
-    Logger::log("[i] EDR System ready. Try creating files, opening sites, or running apps.\n");
+    Logger::log(
+        "[SYSTEM] Initial process baseline is being created"
+    );
 
-    // 2. Главный цикл системы
+    processWatcher.scan();
+    networkWatcher.scan();
+
+    Logger::log(
+        "[SYSTEM] Monitoring is active"
+    );
+
     while (true) {
-        procWatcher.scan();
-        netWatcher.scan();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        processWatcher.scan();
+        networkWatcher.scan();
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(100)
+        );
     }
 
     return 0;

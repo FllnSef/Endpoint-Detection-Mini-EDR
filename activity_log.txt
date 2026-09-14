@@ -1,166 +1,38 @@
-=================================================================
-  FULL EDR AGENT ACTIVE (Files + Web + Processes + YARA + Protect)
-=================================================================
-
-[i] Monitoring directory: /home/kali/Desktop/Endpoint-Detection-Mini-EDR/Endpoint-Detection-Mini-EDR
-[i] EDR System ready. Try creating files, opening sites, or running apps.
-
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 40.74.98.198:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 185.199.110.133:443 (Domain: cdn-185-199-110-133.github.com)
-[⚙️ PROC_EXIT]   PID: 6577 | App: [localsearch-ext]
-[⚙️ PROC_LAUNCH] PID: 6927 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 6928 | Parent PID: 6927 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 6934 | Parent PID: 6928 | App: [sleep]
-[⚙️ PROC_LAUNCH] PID: 6945 | Parent PID: 2693 | App: [git]
-[⚙️ PROC_LAUNCH] PID: 6946 | Parent PID: 6945 | App: [git]
-[⚙️ PROC_LAUNCH] PID: 6947 | Parent PID: 6946 | App: [git-remote-http]
-[⚙️ PROC_EXIT]   PID: 6934 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 6928 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 6927 | App: [sh]
-[🌐 WEB_CONNECT] PID: 6947 [git-remote-http] -> 140.82.121.4:443 (Domain: lb-140-82-121-4-fra.github.com)
-[⚙️ PROC_EXIT]   PID: 6947 | App: [git-remote-http]
-[⚙️ PROC_EXIT]   PID: 6946 | App: [git]
-[⚙️ PROC_EXIT]   PID: 6945 | App: [git]
-[🌐 WEB_DISCONN] PID: 6947 [git-remote-http] closed connection to 140.82.121.4:443 (lb-140-82-121-4-fra.github.com)
-[⚙️ PROC_LAUNCH] PID: 6997 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 6998 | Parent PID: 6997 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7004 | Parent PID: 6998 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 6998 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 6997 | App: [sh]
-[⚙️ PROC_EXIT]   PID: 7004 | App: [sleep]
-[⚙️ PROC_LAUNCH] PID: 7053 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7054 | Parent PID: 7053 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7060 | Parent PID: 7054 | App: [sleep]
-[⚙️ PROC_LAUNCH] PID: 7061 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_LAUNCH] PID: 7062 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_LAUNCH] PID: 7063 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_LAUNCH] PID: 7064 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_LAUNCH] PID: 7065 | Parent PID: 0 | App: [<unknown>]
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 140.82.121.5:443 (Domain: lb-140-82-121-5-fra.github.com)
-[⚙️ PROC_EXIT]   PID: 7064 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7061 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7063 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7065 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7062 | App: [<unknown>]
-[🌐 WEB_CONNECT] PID: 2693 [code] -> 140.82.121.5:443 (Domain: lb-140-82-121-5-fra.github.com)
-[⚙️ PROC_EXIT]   PID: 7060 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7054 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 7053 | App: [sh]
-[📁 FILE_CREATED]  /home/kali/Desktop/Endpoint-Detection-Mini-EDR/Endpoint-Detection-Mini-EDR/tete.txt
-[⚙️ PROC_EXIT]   PID: 3375 | App: [cpptools-srv2]
-[⚙️ PROC_LAUNCH] PID: 7111 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_LAUNCH] PID: 7115 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7116 | Parent PID: 7115 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7122 | Parent PID: 7116 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7111 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7122 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7116 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 7115 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7175 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7176 | Parent PID: 7175 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7182 | Parent PID: 7176 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7182 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7176 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 7175 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7234 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7235 | Parent PID: 7234 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7241 | Parent PID: 7235 | App: [sleep]
-[🌐 WEB_CONNECT] PID: 2693 [code] -> 140.82.114.22:443 (Domain: lb-140-82-114-22-iad.github.com)
-[⚙️ PROC_EXIT]   PID: 7241 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7235 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 7234 | App: [sh]
-[🌐 WEB_DISCONN] PID: 2693 [code] closed connection to 140.82.114.22:443 (lb-140-82-114-22-iad.github.com)
-[⚙️ PROC_LAUNCH] PID: 7292 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7293 | Parent PID: 7292 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7299 | Parent PID: 7293 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7293 | App: [cpuUsage.sh]
-[⚙️ PROC_EXIT]   PID: 7299 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7292 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7350 | Parent PID: 2636 | App: [sh]
-[⚙️ PROC_LAUNCH] PID: 7351 | Parent PID: 7350 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7357 | Parent PID: 7351 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7357 | App: [sleep]
-[⚙️ PROC_EXIT]   PID: 7350 | App: [sh]
-[⚙️ PROC_EXIT]   PID: 7351 | App: [cpuUsage.sh]
-[⚙️ PROC_LAUNCH] PID: 7386 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_LAUNCH] PID: 7391 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7391 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 7386 | App: [<unknown>]
-=================================================================
-  FULL EDR AGENT ACTIVE (Files + Web + Processes + YARA + Protect)
-=================================================================
-
-[i] Monitoring directory: /home/kali/Desktop/Endpoint-Detection-Mini-EDR/Endpoint-Detection-Mini-EDR
-[i] EDR System ready. Try creating files, opening sites, or running apps.
-
-=================================================================
-  FULL EDR AGENT ACTIVE (Files + Web + Processes + YARA + Protect)
-=================================================================
-
-[i] Monitoring directory: /home/kali/Desktop/Endpoint-Detection-Mini-EDR/Endpoint-Detection-Mini-EDR
-[i] EDR System ready. Try creating files, opening sites, or running apps.
-
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 150.171.109.53:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 140.82.121.5:443 (Domain: lb-140-82-121-5-fra.github.com)
-[🌐 WEB_CONNECT] PID: 2693 [code] -> 140.82.121.5:443 (Domain: lb-140-82-121-5-fra.github.com)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 149.154.167.99:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 149.154.167.99:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 52.168.117.175:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 140.82.114.26:443 (Domain: lb-140-82-114-26-iad.github.com)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 34.107.243.93:443 (Domain: 93.243.107.34.bc.googleusercontent.com)
-[🌐 WEB_CONNECT] PID: 2533 [code] -> 13.107.5.93:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 2693 [code] -> 13.107.5.93:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 2693 [code] -> 13.107.5.93:443 (Domain: direct-ip)
-[⚙️ PROC_LAUNCH] PID: 19050 | Parent PID: 0 | App: [We]
-[⚙️ PROC_LAUNCH] PID: 19129 | Parent PID: 0 | App: [We]
-[⚙️ PROC_EXIT]   PID: 18203 | App: [bwrap]
-[⚙️ PROC_EXIT]   PID: 18201 | App: [bwrap]
-[⚙️ PROC_EXIT]   PID: 18205 | App: [glycin-image-rs]
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 209.85.233.94:443 (Domain: lr-in-f94.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 142.251.98.94:443 (Domain: nt-in-f94.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 151.101.1.91:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 142.251.1.95:443 (Domain: lb-in-f95.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 142.251.155.119:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 108.177.14.94:443 (Domain: lt-in-f94.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 74.125.163.134:443 (Domain: fra24s19-in-f6.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 151.101.193.91:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 108.177.14.149:443 (Domain: lt-in-f149.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 74.125.205.156:443 (Domain: le-in-f156.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 142.251.157.4:443 (Domain: direct-ip)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 64.233.163.91:443 (Domain: lj-in-f91.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 74.125.131.119:443 (Domain: lu-in-f119.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 142.251.1.198:443 (Domain: lb-in-f198.1e100.net)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 64.233.162.102:443 (Domain: li-in-f102.1e100.net)
-[🌐 WEB_DISCONN] PID: 2693 [code] closed connection to 13.107.5.93:443 (direct-ip)
-[🌐 WEB_DISCONN] PID: 2533 [code] closed connection to 140.82.121.5:443 (lb-140-82-121-5-fra.github.com)
-[🌐 WEB_DISCONN] PID: 2693 [code] closed connection to 140.82.121.5:443 (lb-140-82-121-5-fra.github.com)
-[⚙️ PROC_LAUNCH] PID: 19415 | Parent PID: 398 | App: [systemd-userwor]
-[⚙️ PROC_LAUNCH] PID: 19429 | Parent PID: 398 | App: [systemd-userwor]
-[⚙️ PROC_LAUNCH] PID: 19460 | Parent PID: 398 | App: [systemd-userwor]
-[⚙️ PROC_EXIT]   PID: 18045 | App: [glycin-svg]
-[⚙️ PROC_EXIT]   PID: 18044 | App: [bwrap]
-[⚙️ PROC_EXIT]   PID: 18043 | App: [bwrap]
-[⚙️ PROC_EXIT]   PID: 16199 | App: [systemd-userwor]
-[⚙️ PROC_EXIT]   PID: 16200 | App: [systemd-userwor]
-[⚙️ PROC_EXIT]   PID: 16201 | App: [systemd-userwor]
-[⚙️ PROC_EXIT]   PID: 12517 | App: [Isolate]
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 34.149.226.178:443 (Domain: 178.226.149.34.bc.googleusercontent.com)
-[🌐 WEB_CONNECT] PID: 8250 [firefox-esr] -> 151.101.129.91:443 (Domain: direct-ip)
-[🌐 WEB_DISCONN] PID: 2533 [code] closed connection to 150.171.109.53:443 (direct-ip)
-[⚙️ PROC_LAUNCH] PID: 19730 | Parent PID: 0 | App: [We]
-[⚙️ PROC_EXIT]   PID: 11800 | App: [kworker/3:1-cgroup_free]
-[⚙️ PROC_EXIT]   PID: 14386 | App: [kworker/0:1-ata_sff]
-[⚙️ PROC_LAUNCH] PID: 19763 | Parent PID: 2 | App: [kworker/0:1]
-[⚙️ PROC_LAUNCH] PID: 19784 | Parent PID: 0 | App: [<unknown>]
-[⚙️ PROC_EXIT]   PID: 19784 | App: [<unknown>]
-[🌐 WEB_DISCONN] PID: 2533 [code] closed connection to 13.107.5.93:443 (direct-ip)
-[⚙️ PROC_LAUNCH] PID: 19881 | Parent PID: 1254 | App: [sh]
-[⚙️ PROC_EXIT]   PID: 19881 | App: [sh]
-[⚙️ PROC_EXIT]   PID: 12622 | App: [Isolate]
-[⚙️ PROC_LAUNCH] PID: 20145 | Parent PID: 0 | App: [We]
-[⚙️ PROC_LAUNCH] PID: 20147 | Parent PID: 0 | App: [Chroo]
-[⚙️ PROC_EXIT]   PID: 20147 | App: [Chroo]
-[🌐 WEB_DISCONN] PID: 8250 [firefox-esr] closed connection to 74.125.163.134:443 (fra24s19-in-f6.1e100.net)
-[⚙️ PROC_LAUNCH] PID: 20218 | Parent PID: 18028 | App: [bwrap]
-[⚙️ PROC_LAUNCH] PID: 20220 | Parent PID: 20218 | App: [bwrap]
-[⚙️ PROC_LAUNCH] PID: 20221 | Parent PID: 20220 | App: [glycin-image-rs]
+==========================================================
+ FULL EDR AGENT ACTIVE
+ Processes + Network + Files + YARA
+==========================================================
+[FILE] Monitoring directory: /home/kali/Desktop/Endpoint-Detection-Mini-EDR/Endpoint-Detection-Mini-EDR
+[YARA] Scanner initialized
+[SYSTEM] Initial process baseline is being created
+[SYSTEM] Monitoring is active
+[PROC_LAUNCH] PID: 114366 | PPID: 1255 | Parent: [gnome-shell] | App: [sh]
+[PROC_LAUNCH] PID: 114367 | PPID: 114366 | Parent: [sh] | App: [sh]
+[PROC_LAUNCH] PID: 114368 | PPID: 114367 | Parent: [sh] | App: [ip]
+[PROC_LAUNCH] PID: 114369 | PPID: 114367 | Parent: [sh] | App: [cut]
+[PROC_LAUNCH] PID: 114370 | PPID: 114367 | Parent: [sh] | App: [head]
+[PROC_EXIT] PID: 114370 | App: [head]
+[PROC_EXIT] PID: 114369 | App: [cut]
+[PROC_EXIT] PID: 114366 | App: [sh]
+[PROC_EXIT] PID: 114367 | App: [sh]
+[PROC_EXIT] PID: 114368 | App: [ip]
+[PROC_LAUNCH] PID: 114392 | PPID: 4185 | Parent: [code] | App: [sh]
+[PROC_LAUNCH] PID: 114394 | PPID: 4185 | Parent: [code] | App: [sh]
+[PROC_LAUNCH] PID: 114399 | PPID: 114393 | Parent: [cpuUsage.sh] | App: [sleep]
+[PROC_LAUNCH] PID: 114404 | PPID: 114395 | Parent: [cpuUsage.sh] | App: [sleep]
+[PROC_EXIT] PID: 114392 | App: [sh]
+[PROC_EXIT] PID: 114399 | App: [sleep]
+[PROC_EXIT] PID: 114404 | App: [sleep]
+[PROC_EXIT] PID: 114394 | App: [sh]
+[DNS] DNS watcher started
+[DNS] Monitoring interface: eth0
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> queuev4.vk.ru
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> copilot-telemetry.githubusercontent.com
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> github.com
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> web.telegram.org
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> kws2-1.web.telegram.org
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> api.github.com
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> api.github.com
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> copilot-telemetry.githubusercontent.com
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> sdk-api.apptracer.ru
+[DNS_QUERY] PID: 0 | PPID: 0 | App: [<unknown>] -> queuev4.vk.ru
