@@ -2,54 +2,22 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build EDR agent",
+            "label": "Собрать ВСЁ (Makefile)",
             "type": "shell",
-            "command": "/usr/bin/g++",
-            "args": [
-                "-std=c++17",
-                "-O2",
-                "-Wall",
-                "-Wextra",
-                "${workspaceFolder}/app.cpp",
-                "-o",
-                "${workspaceFolder}/app",
-                "-lyara",
-                "-pthread"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
+            "command": "make",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
             "problemMatcher": [
                 "$gcc"
-            ],
-            "detail": "Сборка основного EDR-агента"
+            ]
         },
         {
-            "label": "Build DNS watcher",
+            "label": "Очистить проект (Makefile clean)",
             "type": "shell",
-            "command": "/usr/bin/g++",
-            "args": [
-                "-std=c++17",
-                "-O2",
-                "-Wall",
-                "-Wextra",
-                "${workspaceFolder}/dns_watcher.cpp",
-                "-o",
-                "${workspaceFolder}/dns_watcher",
-                "-lpcap",
-                "-pthread"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "detail": "Сборка DNS-монитора"
+            "command": "make clean",
+            "problemMatcher": []
         }
     ]
 }
