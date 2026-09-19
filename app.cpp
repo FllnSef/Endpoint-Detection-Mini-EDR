@@ -211,9 +211,9 @@ ProcessMeta getProcessMeta(unsigned long pid) {
     return result;
 }
 
-// ============================================================================
+// ============================================================
 // NOISE FILTER (ОТСЕВ СИСТЕМНОГО МУСОРА И TELEMETRY VS CODE)
-// ============================================================================
+// ============================================================
 
 bool isProcessNoise(const ProcessMeta& process, const ProcessMeta& parent) {
     if (process.ppid == 2) {
@@ -344,6 +344,117 @@ public:
                 true
             );
         }
+    }
+};
+
+// ============================================================================
+// PERSISTENCE WATCHER (МОНИТОРИНГ МЕХАНИЗМОВ ЗАКРЕПЛЕНИЯ)
+// ============================================================================
+
+struct PersistenceAlert {
+    std::string techniqueId; // e.g. T1053.003
+    std::string techniqueName;
+    std::string targetDescription;
+    std::string filePath;
+    std::string eventType;
+};
+
+class PersistenceWatcher {
+public:
+    static bool inspectPath(const fs::path& fullPath, const std::string& eventType, PersistenceAlert& alert) {
+        std::string pathStr = fullPath.lexically_normal().string();
+        std::string filename = fullPath.filename().string();
+
+        // 1. MITRE T1053.003: Cron Jobs & Scheduled Tasks
+        if (pathStr.rfind("/etc/cron", 0) == 0 || 
+            pathStr.rfind("/var/spool/cron", 0) == 0 || 
+            pathStr == "/etc/crontab") {
+            alert = {
+                "T1053.003",
+                "Scheduled Task/Job: Cron Persistence",
+                "Cron configuration or spool directory modified",
+                pathStr,
+                eventType
+            };
+            return true;
+        }
+
+        // 2. MITRE T1543.002: Systemd Services & Timers
+        if (pathStr.rfind("/etc/systemd/system", 0) == 0 || 
+            pathStr.rfind("/lib/systemd/system", 0) == 0 ||
+            pathStr.rfind("/usr/lib/systemd/system", 0) == 0 ||
+            pathStr.find("/.config/systemd/user") != std::string::npos) {
+            
+            if (filename.find(".service") != std::string::npos || 
+                filename.find(".timer") != std::string::npos ||
+                filename.find(".target") != std::string::npos) {
+                alert = {
+                    "T1543.002",
+                    "Create or Modify System Process: Systemd Service",
+                    "Systemd unit file added or modified",
+                    pathStr,
+                    eventType
+                };
+                return true;
+            }
+        }
+
+        // 3. MITRE T1546.004: Shell Startup Scripts & Profiles
+        if (filename == ".bashrc" || filename == ".bash_profile" || filename == ".profile" ||
+            filename == ".zshrc" || filename == ".bash_login" || filename == ".bash_logout" ||
+            pathStr.rfind("/etc/profile", 0) == 0 || pathStr.rfind("/etc/bash.bashrc", 0) == 0) {
+            alert = {
+                "T1546.004",
+                "Event Triggered Execution: Shell Startup Script",
+                "User or global shell profile / startup script modified",
+                pathStr,
+                eventType
+            };
+            return true;
+        }
+
+        // 4. MITRE T1098.004: SSH Authorized Keys (Backdoor Access)
+        if (pathStr.find("/.ssh/authorized_keys") != std::string::npos ||
+            pathStr.find("/.ssh/authorized_keys2") != std::string::npos ||
+            pathStr.rfind("/etc/ssh/sshd_config", 0) == 0) {
+            alert = {
+                "T1098.004",
+                "Account Manipulation: SSH Authorized Keys Backdoor",
+                "SSH authorized keys or SSH daemon configuration altered",
+                pathStr,
+                eventType
+            };
+            return true;
+        }
+
+        // 5. MITRE T1547.001: Desktop Autostart & init.d
+        if (pathStr.find("/autostart/") != std::string::npos ||
+            pathStr.rfind("/etc/init.d", 0) == 0 ||
+            pathStr.rfind("/etc/rc.local", 0) == 0 ||
+            pathStr.rfind("/etc/rc.d", 0) == 0) {
+            alert = {
+                "T1547.001",
+                "Boot or Logon Autostart Execution: init.d / Desktop Autostart",
+                "Startup script or GUI autostart desktop entry modified",
+                pathStr,
+                eventType
+            };
+            return true;
+        }
+
+        // 6. MITRE T1574.006: Dynamic Linker Hijacking (LD.so.preload)
+        if (pathStr == "/etc/ld.so.preload" || pathStr.rfind("/etc/ld.so.conf", 0) == 0) {
+            alert = {
+                "T1574.006",
+                "Hijack Execution Flow: Dynamic Linker Hijacking",
+                "Global library preload or dynamic linker configuration altered",
+                pathStr,
+                eventType
+            };
+            return true;
+        }
+
+        return false;
     }
 };
 
@@ -1027,7 +1138,7 @@ public:
 };
 
 // ============================================================================
-// SYSTEM-WIDE RECURSIVE FILE SYSTEM WATCHER
+// SYSTEM-WIDE RECURSIVE FILE SYSTEM & PERSISTENCE WATCHER
 // ============================================================================
 
 class EventFileSystemWatcher {
@@ -1167,27 +1278,47 @@ private:
                         std::string eventType;
 
                         if (event->mask & IN_CREATE) {
-                            eventType = isDir ? "📁 DIRECTORY_CREATED" : "📄 FILE_CREATED";
+                            eventType = isDir ? "DIRECTORY_CREATED" : "FILE_CREATED";
                             if (isDir) {
                                 addWatch(path);
                             }
                         } else if (event->mask & IN_MODIFY) {
-                            eventType = isDir ? "📁 DIRECTORY_MODIFIED" : "✏️ FILE_MODIFIED";
+                            eventType = isDir ? "DIRECTORY_MODIFIED" : "FILE_MODIFIED";
                         } else if (event->mask & IN_CLOSE_WRITE) {
-                            eventType = "💾 FILE_SAVED";
+                            eventType = "FILE_SAVED";
                         } else if (event->mask & IN_DELETE) {
-                            eventType = isDir ? "🗑️ DIRECTORY_DELETED" : "🗑️ FILE_DELETED";
+                            eventType = isDir ? "DIRECTORY_DELETED" : "FILE_DELETED";
                         } else if (event->mask & IN_MOVED_FROM) {
-                            eventType = isDir ? "📦 DIRECTORY_MOVED_FROM" : "📦 FILE_MOVED_FROM";
+                            eventType = isDir ? "DIRECTORY_MOVED_FROM" : "FILE_MOVED_FROM";
                         } else if (event->mask & IN_MOVED_TO) {
-                            eventType = isDir ? "📥 DIRECTORY_MOVED_TO" : "📥 FILE_MOVED_TO";
+                            eventType = isDir ? "DIRECTORY_MOVED_TO" : "FILE_MOVED_TO";
                             if (isDir) {
                                 addWatch(path);
                             }
                         }
 
                         if (!eventType.empty()) {
-                            Logger::log("[" + eventType + "] " + path.string());
+                            // 1. Проверка на механизмы закрепления в системе (Persistence Watcher)
+                            PersistenceAlert pAlert;
+                            if (PersistenceWatcher::inspectPath(path, eventType, pAlert)) {
+                                std::stringstream alertMsg;
+                                alertMsg << "\n📌 [PERSISTENCE DETECTED] " << pAlert.techniqueId << " - " << pAlert.techniqueName << "\n"
+                                         << "  ├─ 🎯 Modified Path: " << pAlert.filePath << "\n"
+                                         << "  ├─ ⚡ Event Type   : " << pAlert.eventType << "\n"
+                                         << "  ├─ 📝 Details      : " << pAlert.targetDescription << "\n"
+                                         << "  └─ 🛡️  Category     : CRITICAL_SYSTEM_SECURITY";
+
+                                Logger::log(alertMsg.str(), true);
+                            } else {
+                                // Обычный лог изменения файла
+                                std::string icon = "📄";
+                                if (eventType.find("DIRECTORY") != std::string::npos) icon = "📁";
+                                else if (eventType == "FILE_SAVED") icon = "💾";
+                                else if (eventType.find("DELETED") != std::string::npos) icon = "🗑️";
+                                else if (eventType.find("MODIFIED") != std::string::npos) icon = "✏️";
+
+                                Logger::log("[" + icon + " " + eventType + "] " + path.string());
+                            }
                         }
                     }
                 }
@@ -1222,7 +1353,7 @@ int main() {
         "=========================================================="
     );
     Logger::log(
-        "  FULL EDR AGENT ACTIVE (MITRE ATT&CK Defense Active)"
+        "  FULL EDR AGENT ACTIVE (MITRE ATT&CK + Persistence Defense)"
     );
     Logger::log(
         "=========================================================="
