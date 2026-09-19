@@ -53,7 +53,7 @@ public:
     static void log(const std::string& message, bool critical = false) {
         std::lock_guard<std::mutex> lock(logMutex);
 
-        const std::string prefix = critical ? "🚨 [CRITICAL] " : "";
+        const std::string prefix = critical ? "🚨 [ALERT] " : "";
         const std::string line = prefix + message;
 
         std::cout << line << std::endl;
@@ -211,12 +211,11 @@ ProcessMeta getProcessMeta(unsigned long pid) {
     return result;
 }
 
-// ============================================================
+// ============================================================================
 // NOISE FILTER (ОТСЕВ СИСТЕМНОГО МУСОРА И TELEMETRY VS CODE)
-// ============================================================
+// ============================================================================
 
 bool isProcessNoise(const ProcessMeta& process, const ProcessMeta& parent) {
-    // 1. Потоки ядра (PPID=2 kthreadd)
     if (process.ppid == 2) {
         return true;
     }
@@ -224,7 +223,6 @@ bool isProcessNoise(const ProcessMeta& process, const ProcessMeta& parent) {
     const std::string& name = process.name;
     const std::string& parentName = parent.name;
 
-    // Системные потоки ядра Linux
     if (name.rfind("kworker", 0) == 0 ||
         name.rfind("ksoftirqd", 0) == 0 ||
         name.rfind("migration", 0) == 0 ||
@@ -232,7 +230,6 @@ bool isProcessNoise(const ProcessMeta& process, const ProcessMeta& parent) {
         return true;
     }
 
-    // Внутренняя фоновая телеметрия VS Code (cpuUsage.sh, node workers)
     if (name == "cpuUsage.sh" || parentName == "cpuUsage.sh") {
         return true;
     }
@@ -241,7 +238,6 @@ bool isProcessNoise(const ProcessMeta& process, const ProcessMeta& parent) {
         return true;
     }
 
-    // Фоновые изоляторы рабочего стола
     if (name == "bwrap" ||
         name == "glycin-image-rs" ||
         name == "glycin-svg") {
@@ -348,6 +344,143 @@ public:
                 true
             );
         }
+    }
+};
+
+// ============================================================================
+// MITRE ATT&CK BEHAVIORAL ANALYZER
+// ============================================================================
+
+struct MitreFinding {
+    std::string techniqueId; // e.g. T1059.004
+    std::string techniqueName;
+    std::string description;
+    bool shouldBlock = false;
+};
+
+class MitreAnalyzer {
+public:
+    static std::vector<MitreFinding> analyze(const ProcessMeta& process, const ProcessMeta& parent) {
+        std::vector<MitreFinding> findings;
+
+        std::string cmd = process.cmdline;
+        std::string procName = process.name;
+        std::string parentName = parent.name;
+
+        // Приведение к нижнему регистру для нечувствительности к регистру
+        std::string lowerCmd = cmd;
+        std::transform(lowerCmd.begin(), lowerCmd.end(), lowerCmd.begin(), ::tolower);
+        std::string lowerParent = parentName;
+        std::transform(lowerParent.begin(), lowerParent.end(), lowerParent.begin(), ::tolower);
+        std::string lowerProc = procName;
+        std::transform(lowerProc.begin(), lowerProc.end(), lowerProc.begin(), ::tolower);
+
+        // 1. MITRE T1059.004: Reverse Shell через Bash /dev/tcp или /dev/udp
+        if (lowerCmd.find("/dev/tcp/") != std::string::npos || lowerCmd.find("/dev/udp/") != std::string::npos) {
+            findings.push_back({
+                "T1059.004",
+                "Unix Shell: Reverse Shell via /dev/tcp or /dev/udp",
+                "Detected network pipe redirect in command line: " + cmd,
+                true // Блокировать немедленно
+            });
+        }
+
+        // 2. MITRE T1059: Netcat / Ncat Reverse Shell (-e /bin/sh или -c)
+        if ((lowerProc == "nc" || lowerProc == "netcat" || lowerProc == "ncat") &&
+            (lowerCmd.find("-e ") != std::string::npos || lowerCmd.find("-c ") != std::string::npos || lowerCmd.find("/bin/") != std::string::npos)) {
+            findings.push_back({
+                "T1059",
+                "Command and Scripting Interpreter: Netcat Reverse Shell",
+                "Netcat spawned with shell execution flag: " + cmd,
+                true
+            });
+        }
+
+        // 3. MITRE T1059.006: Python Interactive Reverse Shell (pty.spawn или socket redirect)
+        if (lowerProc.find("python") != std::string::npos) {
+            if ((lowerCmd.find("pty.spawn") != std::string::npos || lowerCmd.find("pty") != std::string::npos) &&
+                (lowerCmd.find("socket") != std::string::npos || lowerCmd.find("connect") != std::string::npos)) {
+                findings.push_back({
+                    "T1059.006",
+                    "Python: Interactive Reverse Shell PTY Injection",
+                    "Python inline script opening socket with PTY shell: " + cmd,
+                    true
+                });
+            }
+        }
+
+        // 4. MITRE T1505.003: Web Shell Activity (веб-сервер порождает командную оболочку)
+        const std::vector<std::string> webServers = {
+            "apache", "apache2", "httpd", "nginx", "lighttpd", "tomcat", "php-fpm", "caddy"
+        };
+        const std::vector<std::string> shells = {
+            "bash", "sh", "dash", "zsh", "python", "python3", "perl", "php", "whoami", "id"
+        };
+
+        bool parentIsWeb = false;
+        for (const auto& ws : webServers) {
+            if (lowerParent.find(ws) != std::string::npos) {
+                parentIsWeb = true;
+                break;
+            }
+        }
+
+        if (parentIsWeb) {
+            for (const auto& sh : shells) {
+                if (lowerProc == sh) {
+                    findings.push_back({
+                        "T1505.003",
+                        "Server Software Component: Web Shell Activity",
+                        "Web server [" + parentName + "] spawned shell process [" + procName + "]: " + cmd,
+                        true
+                    });
+                    break;
+                }
+            }
+        }
+
+        // 5. MITRE T1059: Download & Execute (curl ... | bash или wget ... | sh)
+        if ((lowerCmd.find("curl") != std::string::npos || lowerCmd.find("wget") != std::string::npos) &&
+            (lowerCmd.find("| bash") != std::string::npos || lowerCmd.find("| sh") != std::string::npos || lowerCmd.find("|bash") != std::string::npos || lowerCmd.find("|sh") != std::string::npos)) {
+            findings.push_back({
+                "T1059",
+                "Command and Scripting Interpreter: Download & Pipe to Shell",
+                "Detected pipe from web download directly into shell interpreter: " + cmd,
+                true
+            });
+        }
+
+        // 6. MITRE T1082 / T1087: Reconnaissance & Shadow Access
+        if (lowerCmd.find("/etc/shadow") != std::string::npos || lowerCmd.find("/etc/sudoers") != std::string::npos) {
+            findings.push_back({
+                "T1087",
+                "Account Discovery: Sensitive File Access Attempt",
+                "Access to sensitive authentication file detected in command: " + cmd,
+                false // Тревога без блокировки (может быть sudo grep)
+            });
+        }
+
+        // 7. MITRE T1548.001: SUID / SGID Abuse
+        if (lowerProc == "chmod" && (lowerCmd.find("+s") != std::string::npos || lowerCmd.find("4755") != std::string::npos || lowerCmd.find("4777") != std::string::npos)) {
+            findings.push_back({
+                "T1548.001",
+                "Abuse Elevation Control Mechanism: SUID Bit Modification",
+                "Attempt to grant SUID execution bit detected: " + cmd,
+                false
+            });
+        }
+
+        // 8. MITRE T1070.004: Indicator Removal (очистка истории или логов)
+        if (lowerCmd.find("history -c") != std::string::npos || lowerCmd.find("rm -rf /var/log") != std::string::npos || lowerCmd.find("> /var/log") != std::string::npos) {
+            findings.push_back({
+                "T1070.004",
+                "Indicator Removal: Log / History Wiping Attempt",
+                "Anti-forensics activity detected in command line: " + cmd,
+                false
+            });
+        }
+
+        return findings;
     }
 };
 
@@ -483,7 +616,7 @@ rule Detect_Test_Malware {
 };
 
 // ============================================================================
-// PROCESS WATCHER (ПОДРОБНЫЙ ВЫВОД ПРИЛОЖЕНИЙ, ПУТЕЙ И КОМАНД)
+// PROCESS WATCHER (С ИНСПЕКЦИЕЙ ПОВЕДЕНИЯ MITRE ATT&CK)
 // ============================================================================
 
 class ProcessWatcher {
@@ -542,12 +675,40 @@ public:
                 const ProcessMeta parent =
                     getProcessMeta(process.ppid);
 
-                // Фильтруем фоновый спам VS Code и потоков ядра
+                // Фильтруем фоновый спам VS Code и системных потоков
                 if (isProcessNoise(process, parent)) {
                     continue;
                 }
 
-                // КРАСИВЫЙ И ПОДРОБНЫЙ ВЫВОД ЗАПУСКА ПРОЦЕССА
+                // 1. Поведенческий анализ через MITRE ATT&CK Engine
+                auto findings = MitreAnalyzer::analyze(process, parent);
+
+                bool blockedByMitre = false;
+                for (const auto& finding : findings) {
+                    std::stringstream alertMsg;
+                    alertMsg << "\n⚠️  [MITRE ATT&CK DETECTED] " << finding.techniqueId << " - " << finding.techniqueName << "\n"
+                             << "  ├─ 🎯 Target PID : " << process.pid << " [" << process.name << "]\n"
+                             << "  ├─ 👨‍👦 Parent     : [" << parent.name << "] (PID: " << process.ppid << ")\n"
+                             << "  ├─ 📝 Details    : " << finding.description << "\n"
+                             << "  └─ 🛡️  Action     : " << (finding.shouldBlock ? "KILL_PROCESS" : "ALERT_ONLY");
+
+                    Logger::log(alertMsg.str(), true);
+
+                    if (finding.shouldBlock && !blockedByMitre) {
+                        ActiveResponder::terminateProcess(
+                            process.pid,
+                            process.name,
+                            "MITRE ATT&CK: " + finding.techniqueId + " (" + finding.techniqueName + ")"
+                        );
+                        blockedByMitre = true;
+                    }
+                }
+
+                if (blockedByMitre) {
+                    continue;
+                }
+
+                // Обычный информационный вывод запуска процесса
                 std::stringstream message;
                 message << "\n[⚙️ PROC_LAUNCH] Process: [" << process.name << "] (PID: " << process.pid << ")\n"
                         << "  ├─ 👨‍👦 Parent     : [" << parent.name << "] (PID: " << process.ppid << ")\n"
@@ -584,7 +745,6 @@ public:
         if (!firstScan_) {
             for (const auto& [pid, name] : knownProcesses_) {
                 if (currentProcesses.find(pid) == currentProcesses.end()) {
-                    // Отсеиваем закрытие шума
                     if (name.rfind("kworker", 0) == 0 ||
                         name.rfind("ksoftirqd", 0) == 0 ||
                         name == "cpuUsage.sh" ||
@@ -1062,7 +1222,7 @@ int main() {
         "=========================================================="
     );
     Logger::log(
-        "  FULL EDR AGENT ACTIVE (Detailed Inspection Mode)"
+        "  FULL EDR AGENT ACTIVE (MITRE ATT&CK Defense Active)"
     );
     Logger::log(
         "=========================================================="
